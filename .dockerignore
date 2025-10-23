@@ -1,0 +1,8 @@
+target
+.git
+.github
+**/*.rs.bk
+*.log
+hack
+*.tmp
+*.swp

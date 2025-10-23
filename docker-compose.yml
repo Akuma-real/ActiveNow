@@ -1,0 +1,25 @@
+services:
+  activenow:
+    container_name: activenow
+    # 本地构建（默认）
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - RUST_VERSION=${RUST_VERSION:-1.82}
+        - ALPINE_VERSION=${ALPINE_VERSION:-3.20}
+    # 为本地构建产物指定镜像名（可选）
+    image: ${IMAGE_NAME:-activenow}:${TAG:-dev}
+    # 使用预构建的 GHCR 镜像时：
+    # 1) 注释掉上方的 build 块；
+    # 2) 将下行取消注释，并设置 .env 中的 GHCR_OWNER/IMAGE_NAME/TAG
+    # image: ghcr.io/${GHCR_OWNER:-yourname}/${IMAGE_NAME:-activenow}:${TAG:-main}
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - PORT=${PORT:-8080}
+      - PRESENCE_TTL=${PRESENCE_TTL:-30}
+      - PING_INTERVAL=${PING_INTERVAL:-0}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
+    ports:
+      - "${HOST_PORT:-8080}:8080"
+    restart: unless-stopped

@@ -1,0 +1,17 @@
+# Rust build
+/target/
+**/*.rs.bk
+
+# IDE
+/.vscode/
+/.idea/
+
+# OS junk
+.DS_Store
+
+# Logs
+*.log
+
+# Env files
+.env
+.env.*
