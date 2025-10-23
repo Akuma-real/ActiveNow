@@ -1,0 +1,145 @@
+name: prerelease-binaries
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    name: Compute next pre-release tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+      name: ${{ steps.ver.outputs.name }}
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next tag from Cargo.toml
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=$(grep -m1 '^version\s*=\s*"[0-9]\+\.[0-9]\+\.[0-9]\+"' Cargo.toml | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
+          PRE_ID=${PRE_ID:-pre}
+          # find existing pre-release tags for this base
+          LAST=$(git tag -l "v${BASE}-${PRE_ID}.*" --sort=-version:refname | head -n1 || true)
+          if [[ -z "$LAST" ]]; then N=1; else N=$(( $(echo "$LAST" | sed -E 's/.*\.'//) + 1 )); fi
+          TAG="v${BASE}-${PRE_ID}.${N}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "name=Pre-release $TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.name }}
+          prerelease: true
+          make_latest: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: Build ${{ matrix.os }} (${{ matrix.rust }})
+    runs-on: ${{ matrix.os }}
+    needs: version
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_DIR: ~/.cache/sccache
+      SCCACHE_CACHE_SIZE: 2G
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        rust: [ stable ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (${{ matrix.rust }})
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install sccache (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sccache
+
+      - name: Install sccache (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install sccache
+
+      - name: Install sccache (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          choco install sccache -y
+
+      - name: Cache sccache store
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: ${{ runner.os }}-sccache-${{ matrix.rust }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-sccache-
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
+
+      - name: Build release
+        run: cargo build --release --locked
+
+      - name: Show sccache stats
+        run: sccache --show-stats || true
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="activenow"
+          EXE=""
+          OSN="$(uname -s)"
+          ARCH="$(uname -m)"
+          case "$OSN" in
+            Linux)   OSN=linux ;;
+            Darwin)  OSN=macos ;;
+            MINGW*|MSYS*|CYGWIN*) OSN=windows ; EXE=".exe" ;;
+          esac
+          mkdir -p dist
+          cp "target/release/${BIN}${EXE}" "dist/${BIN}-${OSN}-${ARCH}${EXE}"
+          if [ "$OSN" = windows ]; then
+            # Windows runner has 7z
+            7z a "dist/${BIN}-${OSN}-${ARCH}.zip" "dist/${BIN}-${OSN}-${ARCH}${EXE}" >/dev/null
+            rm "dist/${BIN}-${OSN}-${ARCH}${EXE}"
+          else
+            tar -C dist -czf "dist/${BIN}-${OSN}-${ARCH}.tar.gz" "${BIN}-${OSN}-${ARCH}${EXE}"
+            rm "dist/${BIN}-${OSN}-${ARCH}${EXE}"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: activenow-${{ runner.os }}-${{ runner.arch }}
+          path: dist/*
+
+      - name: Attach to pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          files: dist/*
+          prerelease: true
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

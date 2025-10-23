@@ -1,5 +1,6 @@
 # Rust build
 /target/
+dist/
 **/*.rs.bk
 
 # IDE
@@ -14,4 +15,3 @@
 
 # Env files
 .env
-.env.*
