@@ -40,12 +40,15 @@ async fn main() {
         rooms: Rooms::new(),
         ttl: cfg.ttl,
         ping_interval: cfg.ping_interval,
-        origin_whitelist: cfg.allowed_origins,
+        origin_whitelist: cfg.allowed_origins.clone(),
         meta: meta_backend,
         online_tx,
         online_rx,
         web_event_tx,
     };
+
+    // 打印运行时环境配置，便于排障
+    log_runtime_env(&cfg);
 
     // spawn cleanup task
     let rooms_for_cleanup = state.rooms.clone();
@@ -99,4 +102,38 @@ async fn main() {
     tracing::info!(%addr, "listening");
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind port");
     axum::serve(listener, app).await.expect("server error");
+}
+
+fn log_runtime_env(cfg: &config::Config) {
+    use tracing::info;
+    // 尽量避免输出敏感信息：隐藏 Redis 认证
+    let redis = cfg.redis_url.as_deref().map(redact_url).unwrap_or_else(|| "<none>".to_string());
+    let allowed = cfg
+        .allowed_origins
+        .as_ref()
+        .map(|s| {
+            let mut v: Vec<_> = s.iter().cloned().collect();
+            v.sort();
+            v.join(",")
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "<empty>".to_string());
+
+    info!(
+        port = cfg.port,
+        presence_ttl_secs = cfg.ttl.as_secs(),
+        ping_interval_secs = cfg.ping_interval.map(|d| d.as_secs()),
+        allowed_origins = %allowed,
+        redis_url = %redis,
+        "startup config"
+    );
+}
+
+fn redact_url(s: &str) -> String {
+    if let Ok(mut u) = url::Url::parse(s) {
+        let _ = u.set_username("");
+        let _ = u.set_password(None);
+        return u.to_string();
+    }
+    s.to_string()
 }

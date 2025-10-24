@@ -53,12 +53,10 @@ pub async fn ws_route(
         return (StatusCode::BAD_REQUEST, "invalid room").into_response();
     }
 
-    // origin whitelist (optional)
+    // origin whitelist (optional, relaxed matching)
     if let Some(whitelist) = &state.origin_whitelist {
         if !whitelist.is_empty() {
-            let origin_ok = headers.get("origin").and_then(|v| v.to_str().ok())
-                .map(|o| whitelist.contains(o)).unwrap_or(false);
-            if !origin_ok {
+            if !origin_allowed(&headers, whitelist) {
                 return (StatusCode::FORBIDDEN, "origin not allowed").into_response();
             }
         }
@@ -67,6 +65,77 @@ pub async fn ws_route(
     let room = query.room.clone();
     let sess = extract_session_id(&headers, query.socket_session_id.as_deref());
     ws.on_upgrade(move |socket| handle_ws(socket, state, room, sess))
+}
+
+fn origin_allowed(headers: &HeaderMap, whitelist: &std::collections::HashSet<String>) -> bool {
+    use url::Url;
+
+    // '*' means allow all
+    if whitelist.iter().any(|s| s.trim() == "*") { return true; }
+
+    let orig_raw = match headers.get("origin").and_then(|v| v.to_str().ok()) {
+        Some(v) if !v.trim().is_empty() => v.trim(),
+        _ => return false, // 更安全：无 Origin 时拒绝（可用 '*' 放宽）
+    };
+
+    // 规范化 Origin：scheme, host(lowercase), explicit port(with known default)
+    let parsed = match Url::parse(orig_raw) { Ok(u) => u, Err(_) => return false };
+    let scheme = parsed.scheme().to_ascii_lowercase();
+    let host = match parsed.host_str() { Some(h) => h.to_ascii_lowercase(), None => return false };
+    let port = parsed.port_or_known_default();
+    let canonical = match port {
+        Some(p) => format!("{}://{}:{}", scheme, host, p),
+        None => format!("{}://{}", scheme, host),
+    };
+
+    // 逐项匹配（宽松）：
+    // 1) 完整 origin 精确匹配（大小写规范化 + 默认端口显式化）
+    // 2) host[:port] 匹配（列表项只写 host 则忽略端口；写了端口则端口需一致）
+    // 3) 通配域名：以 '*.domain' 或 '.domain' 表示子域/后缀匹配
+    // 4) 列表项若本身是一个 URL，则按规范化后与 canonical 比较
+    for item in whitelist.iter() {
+        let e = item.trim().trim_end_matches('/').to_ascii_lowercase();
+        if e.is_empty() { continue; }
+
+        // 4) URL 形式
+        if e.starts_with("http://") || e.starts_with("https://") {
+            if let Ok(u) = url::Url::parse(&e) {
+                let hs = u.host_str().map(|h| h.to_ascii_lowercase());
+                let ps = u.port_or_known_default();
+                let sc = u.scheme().to_ascii_lowercase();
+                if let Some(hs) = hs {
+                    let cand = match ps { Some(p) => format!("{}://{}:{}", sc, hs, p), None => format!("{}://{}", sc, hs) };
+                    if cand == canonical { return true; }
+                }
+            }
+            continue;
+        }
+
+        // 3) 后缀/通配符域名
+        if let Some(suffix) = e.strip_prefix("*.").or_else(|| e.strip_prefix('.')) {
+            let suffix = suffix.trim_start_matches('.');
+            if host == suffix || host.ends_with(&format!(".{}", suffix)) { return true; }
+            continue;
+        }
+
+        // 2) host[:port]
+        if let Some((eh, ep)) = e.split_once(':') {
+            if eh == host {
+                if let Ok(ep) = ep.parse::<u16>() {
+                    if let Some(p) = port { if p == ep { return true; } }
+                }
+            }
+            continue;
+        }
+
+        // 2) 仅 host（忽略端口）
+        if e == host { return true; }
+
+        // 1) 回退比较：完整字符串（考虑到少数 Origin 可能无端口）
+        if e == canonical { return true; }
+    }
+
+    false
 }
 
 async fn handle_ws(mut ws: WebSocket, state: AppState, room_name: String, session_id: Option<String>) {
