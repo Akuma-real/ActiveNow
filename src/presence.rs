@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use dashmap::DashMap;
-use tokio::sync::{RwLock, watch};
+use tokio::sync::{RwLock, watch, broadcast};
 use std::time::{Duration, Instant};
 
 #[derive(Clone)]
@@ -55,19 +55,24 @@ pub struct Room {
     members: RwLock<HashMap<String, Instant>>, // sid -> last_seen
     count_tx: watch::Sender<usize>,
     count_rx: watch::Receiver<usize>,
+    event_tx: broadcast::Sender<String>,
 }
 
 impl Room {
     pub fn new() -> Self {
         let (tx, rx) = watch::channel(0usize);
+        let (ev_tx, _ev_rx) = broadcast::channel(256);
         Self {
             members: RwLock::new(HashMap::new()),
             count_tx: tx,
             count_rx: rx,
+            event_tx: ev_tx,
         }
     }
 
     pub fn subscribe(&self) -> watch::Receiver<usize> { self.count_rx.clone() }
+    pub fn subscribe_events(&self) -> broadcast::Receiver<String> { self.event_tx.subscribe() }
+    pub fn broadcast_event<S: Into<String>>(&self, payload: S) { let _ = self.event_tx.send(payload.into()); }
 
     pub async fn join(&self, sid: &str, now: Instant, ttl: Duration) -> usize {
         {
