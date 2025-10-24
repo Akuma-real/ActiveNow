@@ -125,9 +125,10 @@ jobs:
           TGT="${{ matrix.target }}"
           EXE=""
           mkdir -p dist
-          cp "target/${TGT}/release/${BIN}${EXE}" "dist/${BIN}-${TGT}${EXE}"
-          tar -C dist -czf "dist/${BIN}-${TGT}.tar.gz" "${BIN}-${TGT}${EXE}"
-          rm "dist/${BIN}-${TGT}${EXE}"
+          # 将归档内的可执行文件命名为 activenow[.exe]，而不是带三元组后缀
+          cp "target/${TGT}/release/${BIN}${EXE}" "dist/${BIN}${EXE}"
+          tar -C dist -czf "dist/${BIN}-${TGT}.tar.gz" "${BIN}${EXE}"
+          rm -f "dist/${BIN}${EXE}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
