@@ -1,16 +1,11 @@
 mod id;
-mod time;
-mod presence;
 mod gateway;
-mod api;
-mod events;
 
-use std::{net::SocketAddr, time::Duration};
+use std::net::SocketAddr;
 
-use axum::{routing::{get, post}, Router};
-use presence::Rooms;
+use axum::{routing::get, Router, extract::State, Json};
 use tracing_subscriber::{fmt, EnvFilter};
-use gateway::{ws_route, ws_web_route};
+use gateway::ws_web_route;
 mod config;
 mod meta;
 
@@ -22,80 +17,27 @@ async fn main() {
     let cfg = config::Config::from_env();
 
     let (online_tx, online_rx) = tokio::sync::watch::channel::<usize>(0);
-    let (web_event_tx, _web_event_rx) = tokio::sync::broadcast::channel::<String>(256);
-
-    // 选择 MetaStore 后端：Redis 或内存
-    let meta_backend: std::sync::Arc<dyn meta::MetaStore> = if let Some(url) = &cfg.redis_url {
-        match meta::RedisMetaStore::new(url).await {
-            Ok(store) => std::sync::Arc::new(store),
-            Err(e) => {
-                panic!("Redis init failed: {}", e);
-            }
-        }
-    } else {
-        std::sync::Arc::new(meta::MemoryMetaStore::new())
-    };
+    let meta_backend: std::sync::Arc<dyn meta::MetaStore> = std::sync::Arc::new(meta::MemoryMetaStore::new());
 
     let state = gateway::AppState {
-        rooms: Rooms::new(),
-        ttl: cfg.ttl,
         ping_interval: cfg.ping_interval,
-        origin_whitelist: cfg.allowed_origins.clone(),
         meta: meta_backend,
         online_tx,
         online_rx,
-        web_event_tx,
+        origin_whitelist: cfg.allowed_origins.clone(),
     };
 
     // 打印运行时环境配置，便于排障
     log_runtime_env(&cfg);
 
-    // spawn cleanup task
-    let rooms_for_cleanup = state.rooms.clone();
-    let ttl_for_cleanup = state.ttl;
-    tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(Duration::from_secs(1));
-        loop {
-            ticker.tick().await;
-            rooms_for_cleanup.cleanup_all(std::time::Instant::now(), ttl_for_cleanup).await;
-        }
-    });
-
-    // 后台去抖：每秒批量写入在线统计到 Redis
-    {
-        let mut rx = state.online_rx.clone();
-        let meta = state.meta.clone();
-        tokio::spawn(async move {
-            let mut latest = *rx.borrow();
-            let mut dirty = false;
-            let mut ticker = tokio::time::interval(Duration::from_secs(1));
-            loop {
-                tokio::select! {
-                    _ = ticker.tick() => {
-                        if dirty {
-                            meta.update_online_stats(latest).await;
-                            dirty = false;
-                        }
-                    }
-                    changed = rx.changed() => {
-                        if changed.is_err() { break; }
-                        latest = *rx.borrow();
-                        dirty = true;
-                    }
-                }
-            }
-        });
-    }
+    // 仅在线人数，移除房间清理与日统计
 
     let app = Router::new()
-        .route("/v1/ws", get(ws_route))
+        .route("/ws", get(ws_web_route))
+        .route("/v1/ws", get(ws_web_route))
         .route("/v1/ws/web", get(ws_web_route))
         .route("/web", get(ws_web_route))
-        .route("/v1/rooms/active", get(api::top_active_rooms))
-        .route("/v1/activity/presence", get(api::get_room_presence))
-        .route("/v1/activity/presence/update", post(api::update_presence))
-        .route("/v1/activity/rooms", get(api::get_rooms_info))
-        .route("/v1/metrics/online/today", get(api::get_online_today))
+        .route("/v1/metrics/online", get(get_online))
         .with_state(state);
 
     let addr: SocketAddr = ([0,0,0,0], cfg.port).into();
@@ -106,8 +48,6 @@ async fn main() {
 
 fn log_runtime_env(cfg: &config::Config) {
     use tracing::info;
-    // 尽量避免输出敏感信息：隐藏 Redis 认证
-    let redis = cfg.redis_url.as_deref().map(redact_url).unwrap_or_else(|| "<none>".to_string());
     let allowed = cfg
         .allowed_origins
         .as_ref()
@@ -118,22 +58,13 @@ fn log_runtime_env(cfg: &config::Config) {
         })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "<empty>".to_string());
-
-    info!(
-        port = cfg.port,
-        presence_ttl_secs = cfg.ttl.as_secs(),
-        ping_interval_secs = cfg.ping_interval.map(|d| d.as_secs()),
-        allowed_origins = %allowed,
-        redis_url = %redis,
-        "startup config"
-    );
+    info!(port = cfg.port, ping_interval_secs = cfg.ping_interval.map(|d| d.as_secs()), allowed_origins = %allowed, "startup config");
 }
 
-fn redact_url(s: &str) -> String {
-    if let Ok(mut u) = url::Url::parse(s) {
-        let _ = u.set_username("");
-        let _ = u.set_password(None);
-        return u.to_string();
-    }
-    s.to_string()
+
+#[derive(serde::Serialize)]
+struct OnlineCount { online: usize }
+
+async fn get_online(State(state): State<gateway::AppState>) -> Json<OnlineCount> {
+    Json(OnlineCount { online: *state.online_rx.borrow() })
 }
