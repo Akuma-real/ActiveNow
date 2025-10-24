@@ -15,7 +15,10 @@
 
 **二进制构建与下载（已去除 Docker）**
 - 已完全移除 Docker 与 Compose 相关内容与工作流。
-- 预发布自动化：推送到 `main` 将自动计算下一版 `v<package>-pre.N`、创建 GitHub Pre-release，并上传各平台二进制（见 `.github/workflows/binaries.yml`）。
+- 预发布自动化：推送到 `main` 将自动计算下一版 `v<package>-pre.N`、创建 GitHub Pre-release，并上传二进制（见 `.github/workflows/binaries.yml`）。
+  - 当前构建目标：
+    - `x86_64-unknown-linux-musl`（Linux x86_64，musl 静态，更通用）
+    - `x86_64-unknown-linux-gnu`（Linux x86_64，glibc 兼容）
   - 版本基于 `Cargo.toml` 中的 `version`，仅递增预发布序号 `N`；无需手动打标签。
 - 本地构建发布版：
   - `cargo build --release`
