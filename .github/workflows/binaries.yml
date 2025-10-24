@@ -48,7 +48,7 @@ jobs:
     needs: version
     env:
       RUSTC_WRAPPER: sccache
-      SCCACHE_DIR: ~/.cache/sccache
+      SCCACHE_DIR: ${{ runner.temp }}/sccache
       SCCACHE_CACHE_SIZE: 2G
     strategy:
       fail-fast: false
@@ -79,10 +79,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y sccache
 
+      - name: Prepare sccache dir
+        run: |
+          mkdir -p "$SCCACHE_DIR"
+
       - name: Cache sccache store
         uses: actions/cache@v4
         with:
-          path: ~/.cache/sccache
+          path: ${{ env.SCCACHE_DIR }}
           key: ${{ runner.os }}-sccache-${{ matrix.rust }}-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-sccache-
