@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   version:
-    name: Compute next pre-release tag
+    name: Prepare fixed pre-release tag
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.ver.outputs.tag }}
@@ -21,28 +21,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Compute next tag from Cargo.toml
+      - name: Set fixed pre-release tag
         id: ver
         shell: bash
         run: |
           set -euo pipefail
-          BASE=$(grep -m1 '^version\s*=\s*"[0-9]\+\.[0-9]\+\.[0-9]\+"' Cargo.toml | sed -E 's/.*"([0-9]+\.[0-9]+\.[0-9]+)".*/\1/')
-          PRE_ID=${PRE_ID:-pre}
-          # find existing pre-release tags for this base
-          LAST=$(git tag -l "v${BASE}-${PRE_ID}.*" --sort=-version:refname | head -n1 || true)
-          if [[ -z "$LAST" ]]; then N=1; else N=$(( $(echo "$LAST" | sed -E 's/.*\.'//) + 1 )); fi
-          TAG="v${BASE}-${PRE_ID}.${N}"
+          TAG="${PRE_TAG:-pre-release}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "name=Pre-release $TAG" >> "$GITHUB_OUTPUT"
+          echo "name=Pre-release" >> "$GITHUB_OUTPUT"
 
-      - name: Create or update pre-release
-        uses: softprops/action-gh-release@v2
+      - name: Create or update pre-release (fixed tag)
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: ${{ steps.ver.outputs.tag }}
+          tag: ${{ steps.ver.outputs.tag }}
           name: ${{ steps.ver.outputs.name }}
           prerelease: true
-          make_latest: false
-          generate_release_notes: true
+          allowUpdates: true
+          omitBodyDuringUpdate: true
+          omitNameDuringUpdate: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -136,12 +132,15 @@ jobs:
           name: activenow-${{ matrix.target }}
           path: dist/*
 
-      - name: Attach to pre-release
-        uses: softprops/action-gh-release@v2
+      - name: Attach to pre-release (update files)
+        uses: ncipollo/release-action@v1
         with:
-          tag_name: ${{ needs.version.outputs.tag }}
-          files: dist/*
+          tag: ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.name }}
           prerelease: true
-          make_latest: false
+          allowUpdates: true
+          omitBodyDuringUpdate: true
+          omitNameDuringUpdate: true
+          files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
