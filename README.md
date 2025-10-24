@@ -35,6 +35,11 @@
   - `{"type":"hello","sid","ttl","count"}`
   - `{"type":"sync","count"}`（仅人数变化时发送）
 
+**聚合接口**
+- URL：`GET /v1/rooms/active?limit=10`
+- 返回：`[{ "room": string, "count": number, "path": string, "title": string }]`
+- 说明：当前未存储额外元数据，`path/title` 暂与 `room` 相同，便于前端展示。
+
 **实现要点**
 - 使用 tokio `watch` 分发“最新人数”，新订阅者可立即获得当前值；
 - 使用单调时间 `Instant` 判断 TTL，避免系统时钟变更影响；

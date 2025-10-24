@@ -35,6 +35,20 @@ impl Rooms {
         }
         for k in empty_keys { let _ = self.inner.remove(&k); }
     }
+
+    pub async fn snapshot_counts(&self, now: Instant, ttl: Duration) -> Vec<(String, usize)> {
+        let rooms: Vec<(String, Arc<Room>)> = self.inner
+            .iter()
+            .map(|e| (e.key().clone(), e.value().clone()))
+            .collect();
+
+        let mut out = Vec::with_capacity(rooms.len());
+        for (name, room) in rooms {
+            let c = room.active_count(now, ttl).await;
+            if c > 0 { out.push((name, c)); }
+        }
+        out
+    }
 }
 
 pub struct Room {
@@ -110,5 +124,9 @@ impl Room {
     async fn effective_count(&self, now: Instant, ttl: Duration) -> usize {
         let members = self.members.read().await;
         members.values().filter(|&&t| now.duration_since(t) < ttl).count()
+    }
+
+    pub async fn active_count(&self, now: Instant, ttl: Duration) -> usize {
+        self.effective_count(now, ttl).await
     }
 }

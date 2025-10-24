@@ -2,6 +2,7 @@ mod id;
 mod time;
 mod presence;
 mod ws;
+mod api;
 
 use std::{env, net::SocketAddr, time::Duration, collections::HashSet};
 
@@ -49,6 +50,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/v1/ws", get(ws_route))
+        .route("/v1/rooms/active", get(api::top_active_rooms))
         .with_state(state);
 
     let addr: SocketAddr = ([0,0,0,0], port).into();
